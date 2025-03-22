@@ -3,27 +3,31 @@ import struct
 
 from socket import gethostbyname_ex, gethostname, inet_aton, inet_ntoa
 
+
 # see https://en.wikipedia.org/wiki/Dynamic_Host_Configuration_Protocol
 # section DHCP options
 
 def get_host_ip_addresses():
     return gethostbyname_ex(gethostname())[2]
 
+
 def inet_ntoaX(data):
     return ['.'.join(map(str, data[i:i + 4])) for i in range(0, len(data), 4)]
+
 
 def inet_atonX(ips):
     return b''.join(map(inet_aton, ips))
 
+
 dhcp_message_types = {
-    1 : 'DHCPDISCOVER',
-    2 : 'DHCPOFFER',
-    3 : 'DHCPREQUEST',
-    4 : 'DHCPDECLINE',
-    5 : 'DHCPACK',
-    6 : 'DHCPNAK',
-    7 : 'DHCPRELEASE',
-    8 : 'DHCPINFORM',
+    1: 'DHCPDISCOVER',
+    2: 'DHCPOFFER',
+    3: 'DHCPREQUEST',
+    4: 'DHCPDECLINE',
+    5: 'DHCPACK',
+    6: 'DHCPNAK',
+    7: 'DHCPRELEASE',
+    8: 'DHCPINFORM',
 }
 reversed_dhcp_message_types = dict()
 for i, v in dhcp_message_types.items():
@@ -35,16 +39,20 @@ shortpack = lambda i: bytes([i >> 8, i & 255])
 
 def macunpack(data):
     s = base64.b16encode(data)
-    return ':'.join([s[i: i +2].decode('ascii') for i in range(0, 12, 2)])
+    return ':'.join([s[i: i + 2].decode('ascii') for i in range(0, 12, 2)])
+
 
 def macpack(mac):
     return base64.b16decode(mac.replace(':', '').replace('-', '').encode('ascii'))
 
+
 def unpackbool(data):
     return data[0]
 
+
 def packbool(bool):
     return bytes([bool])
+
 
 options = [
     # RFC1497 vendor extensions
@@ -107,7 +115,8 @@ options = [
     ('requested_ip_address', inet_ntoa, inet_aton),
     ('ip_address_lease_time', lambda d: struct.unpack('>I', d)[0], lambda i: struct.pack('>I', i)),
     ('option_overload', None, None),
-    ('dhcp_message_type', lambda data: dhcp_message_types.get(data[0], data[0]), (lambda name: bytes([reversed_dhcp_message_types.get(name, name)]))),
+    ('dhcp_message_type', lambda data: dhcp_message_types.get(data[0], data[0]),
+     (lambda name: bytes([reversed_dhcp_message_types.get(name, name)]))),
     ('server_identifier', inet_ntoa, inet_aton),
     ('parameter_request_list', list, bytes),
     ('message', None, None),
@@ -134,15 +143,15 @@ options = [
     ('stda_server', inet_ntoaX, inet_atonX),
 ]
 
-class ReadBootProtocolPacket(object):
 
+class ReadBootProtocolPacket(object):
     for i, o in enumerate(options):
         locals()[o[0]] = None
         locals()['option_{0}'.format(i)] = None
 
     del i, o
 
-    def __init__(self, data, address = ('0.0.0.0', 0)):
+    def __init__(self, data, address=('0.0.0.0', 0)):
         self.data = data
         self.address = address
         self.host = address[0]
@@ -150,37 +159,42 @@ class ReadBootProtocolPacket(object):
 
         # wireshark = wikipedia = data[...]
 
-        self.message_type = self.OP =                data[0]
-        self.hardware_type = self.HTYPE =            data[1]
-        self.hardware_address_length = self.HLEN =   data[2]
-        self.hops = self.HOPS =                      data[3]
+        self.message_type = self.OP = data[0]
+        self.hardware_type = self.HTYPE = data[1]
+        self.hardware_address_length = self.HLEN = data[2]
+        self.hops = self.HOPS = data[3]
 
         self.XID = self.transaction_id = struct.unpack('>I', data[4:8])[0]
 
         self.seconds_elapsed = self.SECS = shortunpack(data[8:10])
-        self.bootp_flags = self.FLAGS =    shortunpack(data[8:10])
+        self.bootp_flags = self.FLAGS = shortunpack(data[8:10])
 
         self.client_ip_address = self.CIADDR = inet_ntoa(data[12:16])
-        self.your_ip_address   = self.YIADDR = inet_ntoa(data[16:20])
+        self.your_ip_address = self.YIADDR = inet_ntoa(data[16:20])
         self.next_server_ip_address = self.SIADDR = inet_ntoa(data[20:24])
         self.relay_agent_ip_address = self.GIADDR = inet_ntoa(data[24:28])
 
         self.client_mac_address = self.CHADDR = macunpack(data[28: 28 + self.hardware_address_length])
         index = 236
-        self.magic_cookie = self.magic_cookie = inet_ntoa(data[index:index + 4]); index += 4
+        self.magic_cookie = self.magic_cookie = inet_ntoa(data[index:index + 4])
+        index += 4
         self.options = dict()
         self.named_options = dict()
         while index < len(data):
-            option = data[index]; index += 1
+            option = data[index]
+            index += 1
             if option == 0:
                 # padding
-                # Can be used to pad other options so that they are aligned to the word boundary; is not followed by length byte
+                # Can be used to pad other options so that they are aligned to the word boundary;
+                # is not followed by length byte
                 continue
             if option == 255:
                 # end
                 break
-            option_length = data[index]; index += 1
-            option_data = data[index: index + option_length]; index += option_length
+            option_length = data[index]
+            index += 1
+            option_data = data[index: index + option_length]
+            index += option_length
             self.options[option] = option_data
             if option < len(options):
                 option_name, function, _ = options[option]
@@ -200,8 +214,8 @@ class ReadBootProtocolPacket(object):
 
     @property
     def formatted_named_options(self):
-        return "\n".join \
-            ("{}:\t{}".format(name.replace('_', ' '), value) for name, value in sorted(self.named_options.items()))
+        return "\n".join("{}:\t{}".format(name.replace('_', ' '),
+                                          value) for name, value in sorted(self.named_options.items()))
 
     def __str__(self):
         return """Message Type: {self.message_type}
@@ -210,7 +224,7 @@ client IP address: {self.client_ip_address}
 your IP address: {self.your_ip_address}
 next server IP address: {self.next_server_ip_address}
 {self.formatted_named_options}
-""".format(self = self)
+""".format(self=self)
 
     def __gt__(self, other):
         return id(self) < id(other)

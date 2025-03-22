@@ -6,111 +6,18 @@ import queue
 import collections
 import traceback
 import socket
+from ssl import SOL_SOCKET
 
-from .listener import *
+import select
+from _socket import inet_aton, SO_REUSEADDR, SOCK_DGRAM, SO_BROADCAST
+
+from simple_dhcp_server.decoders import WriteBootProtocolPacket, ReadBootProtocolPacket
+from socket import gethostbyname_ex, gethostname
 
 def get_host_ip_addresses():
     return gethostbyname_ex(gethostname())[2]
 
 
-class WriteBootProtocolPacket(object):
-
-    message_type = 2 # 1 for client -> server 2 for server -> client
-    hardware_type = 1
-    hardware_address_length = 6
-    hops = 0
-
-    transaction_id = None
-
-    seconds_elapsed = 0
-    bootp_flags = 0 # unicast
-
-    client_ip_address = '0.0.0.0'
-    your_ip_address = '0.0.0.0'
-    next_server_ip_address = '0.0.0.0'
-    relay_agent_ip_address = '0.0.0.0'
-
-    client_mac_address = None
-    magic_cookie = '99.130.83.99'
-
-    parameter_order = []
-    
-    def __init__(self, configuration):
-        for i in range(256):
-            names = ['option_{}'.format(i)]
-            if i < len(options) and hasattr(configuration, options[i][0]):
-                names.append(options[i][0])
-            for name in names:
-                if hasattr(configuration, name):
-                    setattr(self, name, getattr(configuration, name))
-
-    def to_bytes(self):
-        result = bytearray(236)
-        
-        result[0] = self.message_type
-        result[1] = self.hardware_type
-        result[2] = self.hardware_address_length
-        result[3] = self.hops
-
-        result[4:8] = struct.pack('>I', self.transaction_id)
-
-        result[ 8:10] = shortpack(self.seconds_elapsed)
-        result[10:12] = shortpack(self.bootp_flags)
-
-        result[12:16] = inet_aton(self.client_ip_address)
-        result[16:20] = inet_aton(self.your_ip_address)
-        result[20:24] = inet_aton(self.next_server_ip_address)
-        result[24:28] = inet_aton(self.relay_agent_ip_address)
-
-        result[28:28 + self.hardware_address_length] = macpack(self.client_mac_address)
-        
-        result += inet_aton(self.magic_cookie)
-
-        if self.options:
-            for option in self.options:
-                value = self.get_option(option)
-                #print(option, value)
-                if value is None:
-                    continue
-                result += bytes([option, len(value)]) + value
-        result += bytes([255])
-        return bytes(result)
-
-    def get_option(self, option):
-        if option < len(options) and hasattr(self, options[option][0]):
-            value = getattr(self, options[option][0])
-        elif hasattr(self, 'option_{}'.format(option)):
-            value = getattr(self, 'option_{}'.format(option))
-        else:
-            return None
-        function = options[option][2]
-        if function and value is not None:
-            value = function(value)
-        return value
-    
-    @property
-    def options(self):
-        done = list()
-        # fulfill wishes
-        if self.parameter_order:
-            for option in self.parameter_order:
-                if option < len(options) and hasattr(self, options[option][0]) or hasattr(self, 'option_{}'.format(option)):
-                    # this may break with the specification because we must try to fulfill the wishes
-                    if option not in done:
-                        done.append(option)
-        # add my stuff
-        for option, o in enumerate(options):
-            if o[0] and hasattr(self, o[0]):
-                if option not in done:
-                    done.append(option)
-        for option in range(256):
-            if hasattr(self, 'option_{}'.format(option)):
-                if option not in done:
-                    done.append(option)
-        return done
-
-    def __str__(self):
-        return str(ReadBootProtocolPacket(self.to_bytes()))
 
 class DelayWorker(object):
 
@@ -418,7 +325,7 @@ class DHCPServer(object):
         if configuration == None:
             configuration = DHCPServerConfiguration()
         self.configuration = configuration
-        self.socket = socket(type = SOCK_DGRAM)
+        self.socket = socket.socket(type = SOCK_DGRAM)
         self.socket.setsockopt(SOL_SOCKET, SO_REUSEADDR, 1)
         self.socket.bind((self.configuration.bind_address, 67))
         self.delay_worker = DelayWorker()

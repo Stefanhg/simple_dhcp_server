@@ -1,11 +1,13 @@
 import base64
 import struct
 
-from _socket import inet_ntoa, inet_aton
-
+from socket import gethostbyname_ex, gethostname, inet_aton, inet_ntoa
 
 # see https://en.wikipedia.org/wiki/Dynamic_Host_Configuration_Protocol
 # section DHCP options
+
+def get_host_ip_addresses():
+    return gethostbyname_ex(gethostname())[2]
 
 def inet_ntoaX(data):
     return ['.'.join(map(str, data[i:i + 4])) for i in range(0, len(data), 4)]

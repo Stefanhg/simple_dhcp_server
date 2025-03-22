@@ -61,7 +61,6 @@ def main():
     except PermissionError:
         showerror("No access to DHCP port", "The network port cannot be accessed. Run this program with sudo.")
         exit(1)
-    server.run_in_thread()
 
     # create pretty tags
     time_tags = []

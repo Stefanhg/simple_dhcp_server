@@ -45,7 +45,7 @@ broadcast_address: '255.255.255.255'
 
 # Listen to DHCP requests on this interface
 # bind_address: '192.168.137.10'  # Listen for requests on this specific interface
-bind_address: ''                 # Listen for requests on all interfaces
+bind_address: '0.0.0.0'                 # Listen for requests on all interfaces
 
 ########### Memory ###########
 # This is the path to a file to the DHCP-servers memory.

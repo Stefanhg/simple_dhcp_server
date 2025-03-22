@@ -34,7 +34,7 @@ classifiers = [
 ]
 
 
-dependencies = []
+dependencies = ["psutil", "scapy"]
 
 
 [project.optional-dependencies]

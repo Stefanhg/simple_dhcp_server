@@ -90,7 +90,6 @@ def main():
         error_dialog.showMessage("No access to DHCP port 67.\nThe network port cannot be accessed. Run this program with sudo.")
         app.exec()
         exit(1)
-    server.run_in_thread()
 
     window = QMainWindow()
     window.show()

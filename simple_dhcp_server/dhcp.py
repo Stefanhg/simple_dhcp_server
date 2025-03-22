@@ -1,22 +1,12 @@
 #!/usr/bin/python3
-import time
-import threading
-import struct
-import queue
-import collections
-import traceback
-import socket
 from ssl import SOL_SOCKET
 
-import select
 from _socket import inet_aton, SO_REUSEADDR, SOCK_DGRAM, SO_BROADCAST
 
-from simple_dhcp_server.decoders import WriteBootProtocolPacket, ReadBootProtocolPacket
-from socket import gethostbyname_ex, gethostname
+from simple_dhcp_server.decoders import WriteBootProtocolPacket, ReadBootProtocolPacket, get_host_ip_addresses
+from scapy.all import *
 
-def get_host_ip_addresses():
-    return gethostbyname_ex(gethostname())[2]
-
+from simple_dhcp_server.utils import get_interface_by_ip
 
 
 class DelayWorker(object):
@@ -325,45 +315,46 @@ class DHCPServer(object):
         if configuration == None:
             configuration = DHCPServerConfiguration()
         self.configuration = configuration
-        self.socket = socket.socket(type = SOCK_DGRAM)
-        self.socket.setsockopt(SOL_SOCKET, SO_REUSEADDR, 1)
-        self.socket.bind((self.configuration.bind_address, 67))
         self.delay_worker = DelayWorker()
         self.closed = False
         self.transactions = collections.defaultdict(lambda: Transaction(self)) # id: transaction
         self.hosts = HostDatabase(self.configuration.host_file)
         self.time_started = time.time()
 
+        self.configuration.debug(f"Binding to IP {self.configuration.bind_address}")
+        iface = get_interface_by_ip(self.configuration.bind_address)
+        self.configuration.debug(f"Using iface {iface}")
+        sniff(prn=self.packet_handler, filter="udp and port 67", store=1, iface=iface)
+
     def close(self):
-        self.socket.close()
         self.closed = True
         self.delay_worker.close()
         for transaction in list(self.transactions.values()):
             transaction.close()
 
-    def update(self, timeout = 0):
+    def packet_handler(self, packet):
         try:
-            reads = select.select([self.socket], [], [], timeout)[0]
-        except ValueError:
-            # ValueError: file descriptor cannot be a negative integer (-1)
-            return
-        for socket in reads:
-            try:
-                packet = ReadBootProtocolPacket(*socket.recvfrom(4096))
-            except OSError:
-                # OSError: [WinError 10038] An operation was attempted on something that is not a socket
-                pass
-            else:
-                self.received(packet)
-        for transaction_id, transaction in list(self.transactions.items()):
-            if transaction.is_done():
-                transaction.close()
-                self.transactions.pop(transaction_id)
+            if packet.haslayer(DHCP) and packet[DHCP].options[0][1] == 1:  # DHCPDISCOVER
+                self.configuration.debug(f"DHCPDISCOVER packet received from {packet[IP].src}")
+            self.configuration.debug('received:\n {}'.format(str(packet).replace('\n', '\n\t')))
+            packet_dec = ReadBootProtocolPacket(packet[BOOTP].original)
+
+            self.configuration.debug('Decoded:\n {}'.format(str(packet_dec).replace('\n', '\n\t')))
+
+            self.received(packet_dec)
+
+            for transaction_id, transaction in list(self.transactions.items()):
+                if transaction.is_done():
+                    transaction.close()
+                    self.transactions.pop(transaction_id)
+
+        except:
+            self.configuration.debug(traceback.format_exc())
 
     def received(self, packet):
         if not self.transactions[packet.transaction_id].receive(packet):
             self.configuration.debug('received:\n {}'.format(str(packet).replace('\n', '\n\t')))
-            
+
     def client_has_chosen(self, packet):
         self.configuration.debug('client_has_chosen:\n {}'.format(str(packet).replace('\n', '\n\t')))
         host = Host.from_packet(packet)
@@ -390,11 +381,11 @@ class DHCPServer(object):
             for host in known_hosts:
                 if self.is_valid_client_address(host.ip):
                     ip = host.ip
-            print('known ip:', ip)
+            self.configuration.debug('known ip:', ip)
         if ip is None and self.is_valid_client_address(requested_ip_address) and ip not in assigned_addresses:
             # 2. choose valid requested ip address
             ip = requested_ip_address
-            print('valid ip:', ip)
+            self.configuration.debug('valid ip:', ip)
         if ip is None:
             # 3. choose new, free ip address
             chosen = False
@@ -408,9 +399,9 @@ class DHCPServer(object):
                 network_hosts.sort(key = lambda host: host.last_used)
                 ip = network_hosts[0].ip
                 assert self.is_valid_client_address(ip)
-            print('new ip:', ip)
+            self.configuration.debug('new ip:', ip)
         if not any([host.ip == ip for host in known_hosts]):
-            print('add', mac_address, ip, packet.host_name)
+            self.configuration.debug('add', mac_address, ip, packet.host_name)
             self.hosts.replace(Host(mac_address, ip, packet.host_name or '', time.time()))
         return ip
 
@@ -421,7 +412,7 @@ class DHCPServer(object):
     def broadcast(self, packet):
         self.configuration.debug('broadcasting:\n {}'.format(str(packet).replace('\n', '\n\t')))
         for addr in self.server_identifiers:
-            broadcast_socket = socket(type = SOCK_DGRAM)
+            broadcast_socket = socket.socket(type = SOCK_DGRAM)
             broadcast_socket.setsockopt(SOL_SOCKET, SO_REUSEADDR, 1)
             broadcast_socket.setsockopt(SOL_SOCKET, SO_BROADCAST, 1)
             packet.server_identifier = addr
@@ -432,20 +423,6 @@ class DHCPServer(object):
                 broadcast_socket.sendto(data, (addr, 68))
             finally:
                 broadcast_socket.close()
-
-    def run(self):
-        while not self.closed:
-            try:
-                self.update(1)
-            except KeyboardInterrupt:
-                break
-            except:
-                traceback.print_exc()
-
-    def run_in_thread(self):
-        thread = threading.Thread(target = self.run)
-        thread.start()
-        return thread
 
     def debug_clients(self):
         for line in self.ips.all():
@@ -459,6 +436,7 @@ class DHCPServer(object):
     def get_current_hosts(self):
         return sorted_hosts(self.hosts.get(last_used = GREATER(self.time_started)))
 
+
 def main():
     """Run a DHCP server from the command line."""
     configuration = DHCPServerConfiguration()
@@ -466,10 +444,10 @@ def main():
     configuration.adjust_if_this_computer_is_a_router()
     configuration.router #+= ['192.168.0.1']
     configuration.ip_address_lease_time = 60
+    configuration.load_yaml("simple-dhcp-server-qt.yml")
     server = DHCPServer(configuration)
     for ip in server.configuration.all_ip_addresses():
         assert ip == server.configuration.network_filter()
-    server.run()
 
 if __name__ == '__main__':
     main()
